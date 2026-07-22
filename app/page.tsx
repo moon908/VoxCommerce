@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { 
-  Phone, PhoneOff, Mic, MicOff, CheckCircle2, User, HelpCircle, Share, AlertCircle, PhoneCall, History, Volume2
+  Phone, PhoneOff, Mic, MicOff, CheckCircle2, User, HelpCircle, Share, AlertCircle, PhoneCall, History, Volume2, Upload, FileText
 } from 'lucide-react';
 import Vapi from '@vapi-ai/web';
 
@@ -416,6 +416,90 @@ export default function ActiveCallPage() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const getLiveIntel = () => {
+    if (analyzedTicket) {
+      return {
+        customerName: analyzedTicket.customer_name || 'Anonymous',
+        memberStatus: '★ Premium Gold',
+        orderNumber: analyzedTicket.order_id ? (analyzedTicket.order_id.startsWith('#') ? analyzedTicket.order_id : `#${analyzedTicket.order_id}`) : 'Identifying...',
+        issueCategory: analyzedTicket.category || 'Identifying...',
+        summary: analyzedTicket.summary || 'Customer call completed successfully.'
+      };
+    }
+
+    if (!messages || messages.length === 0) {
+      return {
+        customerName: 'Identifying...',
+        memberStatus: '★ Premium Gold',
+        orderNumber: 'Identifying...',
+        issueCategory: 'Identifying...',
+        summary: 'No active call summary available yet. Start a call to generate real-time customer insights.'
+      };
+    }
+
+    const userMessages = messages.filter(m => m.role === 'user').map(m => m.content);
+    const fullText = userMessages.join(' ');
+    const fullTextLower = fullText.toLowerCase();
+
+    // Extract Name
+    let customerName = 'Identifying...';
+    const nameRegexes = [
+      /my name is\s+([A-Za-z\s]+)/i,
+      /i am\s+([A-Za-z\s]+)/i,
+      /this is\s+([A-Za-z\s]+)/i,
+      /name is\s+([A-Za-z\s]+)/i
+    ];
+    for (const regex of nameRegexes) {
+      const match = fullText.match(regex);
+      if (match && match[1]) {
+        const nameCandidate = match[1].trim().split(/\s+/).slice(0, 2).join(' ').replace(/[.,!?]/g, '');
+        if (nameCandidate.length > 2 && !['order', 'refund', 'calling', 'help', 'having', 'issue'].some(w => nameCandidate.toLowerCase().includes(w))) {
+          customerName = nameCandidate;
+          break;
+        }
+      }
+    }
+
+    // Extract Order Number
+    let orderNumber = 'Identifying...';
+    const orderMatch = fullText.match(/(ord-\d+|\b\d{5,8}\b)/i);
+    if (orderMatch && orderMatch[0]) {
+      const rawOrder = orderMatch[0].toUpperCase();
+      orderNumber = rawOrder.startsWith('#') ? rawOrder : `#${rawOrder}`;
+    }
+
+    // Extract Issue Category
+    let issueCategory = 'Identifying...';
+    if (fullTextLower.includes('refund') || fullTextLower.includes('money back') || fullTextLower.includes('return')) {
+      issueCategory = 'Refund';
+    } else if (fullTextLower.includes('charge') || fullTextLower.includes('billing') || fullTextLower.includes('invoice') || fullTextLower.includes('double')) {
+      issueCategory = 'Billing';
+    } else if (fullTextLower.includes('ship') || fullTextLower.includes('delivery') || fullTextLower.includes('delay') || fullTextLower.includes('track') || fullTextLower.includes('package')) {
+      issueCategory = 'Shipping';
+    } else if (fullTextLower.includes('broken') || fullTextLower.includes('faulty') || fullTextLower.includes('defect') || fullTextLower.includes('login')) {
+      issueCategory = 'Technical';
+    } else if (fullTextLower.includes('product') || fullTextLower.includes('size') || fullTextLower.includes('question') || fullTextLower.includes('spec')) {
+      issueCategory = 'Product Query';
+    }
+
+    // Live Summary
+    let summary = 'Call in progress... Collecting customer details and issue description.';
+    if (userMessages.length > 0) {
+      const lastMsg = userMessages[userMessages.length - 1];
+      summary = `Customer reported: "${lastMsg.length > 110 ? lastMsg.substring(0, 110) + '...' : lastMsg}"`;
+    }
+
+    return {
+      customerName,
+      memberStatus: '★ Premium Gold',
+      orderNumber,
+      issueCategory,
+      summary
+    };
+  };
+
+  const liveIntel = getLiveIntel();
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', height: '100%', overflow: 'hidden' }}>
       
@@ -655,73 +739,91 @@ export default function ActiveCallPage() {
           </div>
         </div>
         
-        {/* Right Column: Extracted Intel */}
-        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden' }}>
-          <h3 style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '0.4rem', flexShrink: 0 }}>
-            <Share size={15} style={{ color: 'var(--secondary)' }} /> EXTRACTED INTEL
-          </h3>
+        {/* Right Column: Extracted Intel & Call Summary */}
+        <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: '0.65rem', overflow: 'hidden' }}>
           
-          <div className="card" style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: '1rem', overflowY: 'auto', padding: '1rem' }}>
+          {/* EXTRACTED INTEL CARD (Matches User Spec Image) */}
+          <div style={{ flexShrink: 0 }}>
+            <h3 style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '0.4rem' }}>
+              <Upload size={15} style={{ color: 'var(--secondary)' }} /> EXTRACTED INTEL
+            </h3>
             
-            {/* Customer Identity */}
-            <div>
-              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
-                CUSTOMER IDENTITY
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                <div style={{ border: '1px solid var(--surface-border)', borderRadius: '10px', padding: '10px', backgroundColor: 'var(--neutral-bg)' }}>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 600, marginBottom: '2px' }}>Full Name</div>
-                  <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)' }}>
-                    {analyzedTicket ? analyzedTicket.customer_name : 'Identifying...'}
-                  </div>
+            <div className="card" style={{ padding: '0.9rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
+              
+              {/* CUSTOMER IDENTITY */}
+              <div>
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
+                  CUSTOMER IDENTITY
                 </div>
-                <div style={{ border: '1px solid var(--surface-border)', borderRadius: '10px', padding: '10px', backgroundColor: 'var(--neutral-bg)' }}>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--secondary)', fontWeight: 600, marginBottom: '2px' }}>Member Status</div>
-                  <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ color: 'var(--tertiary)' }}>★</span> Premium Gold
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Transaction Details */}
-            <div>
-              <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
-                TRANSACTION DETAILS
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <div style={{ border: '1px solid var(--primary-glow)', borderRadius: '10px', padding: '10px', backgroundColor: 'var(--surface)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
-                    <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '2px' }}>Order Number</div>
-                    <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                      {analyzedTicket && analyzedTicket.order_id ? `#${analyzedTicket.order_id}` : 'Identifying...'}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                  <div style={{ border: '1px solid var(--surface-border)', borderRadius: '12px', padding: '8px 10px', backgroundColor: 'var(--neutral-bg)' }}>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: 600, marginBottom: '2px' }}>Full Name</div>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', wordBreak: 'break-word' }}>
+                      {liveIntel.customerName}
                     </div>
                   </div>
-                  {analyzedTicket?.order_id && <CheckCircle2 style={{ color: 'var(--primary)' }} size={18} />}
+                  <div style={{ border: '1px solid var(--surface-border)', borderRadius: '12px', padding: '8px 10px', backgroundColor: 'var(--neutral-bg)' }}>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--secondary)', fontWeight: 600, marginBottom: '2px' }}>Member Status</div>
+                    <div style={{ fontSize: '0.9rem', fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span style={{ color: 'var(--tertiary)' }}>★</span> Premium Gold
+                    </div>
+                  </div>
                 </div>
-                
-                <div style={{ border: '1px dashed var(--surface-border)', borderRadius: '10px', padding: '10px', backgroundColor: 'transparent' }}>
-                   <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 500, marginBottom: '2px' }}>Issue Category</div>
-                   <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 500 }}>
-                     {analyzedTicket ? analyzedTicket.category : 'Identifying...'}
-                   </div>
+              </div>
+
+              {/* TRANSACTION DETAILS */}
+              <div>
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
+                  TRANSACTION DETAILS
                 </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ border: '1px solid var(--surface-border)', borderRadius: '12px', padding: '8px 10px', backgroundColor: 'var(--surface)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', fontWeight: 500, marginBottom: '1px' }}>Order Number</div>
+                      <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                        {liveIntel.orderNumber}
+                      </div>
+                    </div>
+                    {liveIntel.orderNumber !== 'Identifying...' && <CheckCircle2 style={{ color: 'var(--primary)' }} size={16} />}
+                  </div>
+                  
+                  <div style={{ border: '1px dashed var(--surface-border)', borderRadius: '12px', padding: '8px 10px', backgroundColor: 'transparent' }}>
+                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 500, marginBottom: '1px' }}>Issue Category</div>
+                    <div style={{ fontSize: '0.86rem', color: liveIntel.issueCategory !== 'Identifying...' ? 'var(--text-primary)' : 'var(--text-secondary)', fontWeight: 600 }}>
+                      {liveIntel.issueCategory}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* CALL SUMMARY CARD (Directly below Extracted Intel) */}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <h3 style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '0.4rem', flexShrink: 0 }}>
+              <FileText size={15} style={{ color: 'var(--primary)' }} /> CALL SUMMARY
+            </h3>
+            
+            <div className="card" style={{ flex: 1, minHeight: 0, padding: '0.9rem', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
+                CUSTOMER CALL SUMMARY
+              </div>
+              <div style={{ 
+                fontSize: '0.84rem', 
+                color: 'var(--text-primary)', 
+                lineHeight: 1.45, 
+                backgroundColor: 'var(--neutral-bg)', 
+                padding: '10px 12px', 
+                borderRadius: '12px',
+                border: '1px solid var(--surface-border)',
+                flex: 1
+              }}>
+                {liveIntel.summary}
               </div>
             </div>
-
-            {/* AI Summary (appears after analyze) */}
-            {analyzedTicket && (
-              <div>
-                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>
-                  AI SUMMARY
-                </div>
-                <div style={{ fontSize: '0.84rem', color: 'var(--text-secondary)', lineHeight: 1.45, backgroundColor: 'var(--neutral-bg)', padding: '10px', borderRadius: '10px' }}>
-                  {analyzedTicket.summary}
-                </div>
-              </div>
-            )}
-            
           </div>
+
         </div>
 
       </div>
