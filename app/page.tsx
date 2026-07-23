@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { 
-  Phone, PhoneOff, Mic, MicOff, CheckCircle2, User, HelpCircle, Share, AlertCircle, PhoneCall, History, Volume2, Upload, FileText, Download
+  Phone, PhoneOff, Mic, MicOff, CheckCircle2, User, HelpCircle, Share, AlertCircle, PhoneCall, History, Volume2, Upload, FileText, Download, X
 } from 'lucide-react';
 import Vapi from '@vapi-ai/web';
 
@@ -295,8 +295,17 @@ export default function ActiveCallPage() {
       });
 
       vapi.on('error', (err: any) => {
-        console.error('Vapi Web SDK Error:', err);
-        setErrorMessage("Vapi voice engine connection notice. Please verify microphone access.");
+        console.error('Vapi Web SDK Error Notice:', err);
+        const rawMsg = typeof err === 'string'
+          ? err
+          : err?.message || err?.error?.message || err?.error || '';
+        
+        // Suppress benign user hangup or cancellation messages
+        if (rawMsg && !rawMsg.toLowerCase().includes('canceled') && !rawMsg.toLowerCase().includes('user ended')) {
+          setErrorMessage(`Vapi Voice Engine Notice: ${rawMsg}`);
+        } else if (!rawMsg) {
+          console.warn("Vapi SDK emitted empty error notice.");
+        }
         setCallStatus('idle');
       });
 
@@ -388,17 +397,7 @@ export default function ActiveCallPage() {
       model: {
         provider: "openai",
         model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content: ECOMMERCE_SYSTEM_PROMPT
-          }
-        ],
-        tools: [
-          {
-            type: "endCall"
-          }
-        ]
+        systemPrompt: ECOMMERCE_SYSTEM_PROMPT
       }
     };
 
@@ -715,8 +714,17 @@ export default function ActiveCallPage() {
             
             {/* Error Toast */}
             {errorMessage && (
-              <div style={{ padding: '10px 14px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', fontSize: '0.82rem', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid var(--surface-border)', flexShrink: 0 }}>
-                <AlertCircle size={16} /> {errorMessage}
+              <div style={{ padding: '10px 14px', backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', fontSize: '0.82rem', fontWeight: 500, display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--surface-border)', flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <AlertCircle size={16} /> {errorMessage}
+                </div>
+                <button 
+                  onClick={() => setErrorMessage(null)}
+                  style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: '2px' }}
+                  title="Dismiss message"
+                >
+                  <X size={15} />
+                </button>
               </div>
             )}
 
