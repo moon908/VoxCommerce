@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { 
-  Phone, PhoneOff, Mic, MicOff, CheckCircle2, User, HelpCircle, Share, AlertCircle, PhoneCall, History, Volume2, Upload, FileText
+  Phone, PhoneOff, Mic, MicOff, CheckCircle2, User, HelpCircle, Share, AlertCircle, PhoneCall, History, Volume2, Upload, FileText, Download
 } from 'lucide-react';
 import Vapi from '@vapi-ai/web';
 
@@ -597,6 +597,44 @@ export default function ActiveCallPage() {
     };
   };
 
+  const handleDownloadExcel = () => {
+    const intel = getLiveIntel();
+    const dateStr = new Date().toISOString().split('T')[0];
+    const safeCustomerName = (intel.customerName || 'Customer').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `VoxCommerce_Customer_Issue_Report_${safeCustomerName}_${dateStr}.csv`;
+
+    const transcriptText = messages.length > 0 
+      ? messages.map(m => `[${new Date(m.timestamp).toLocaleTimeString()}] ${m.role === 'assistant' ? 'Vox AI' : 'Customer'}: ${m.content.replace(/"/g, '""')}`).join(' | ')
+      : 'No transcript recorded.';
+
+    const csvRows = [
+      ['VoxCommerce Customer Support - Issue Report'],
+      ['Report Date', new Date().toLocaleString()],
+      ['Session ID', 'CALL-8842-XN'],
+      [''],
+      ['FIELD', 'VALUE'],
+      ['Customer Name', `"${(intel.customerName || 'Anonymous').replace(/"/g, '""')}"`],
+      ['Member Status', '★ Premium Gold'],
+      ['Order / Transaction ID', `"${(intel.orderNumber || 'N/A').replace(/"/g, '""')}"`],
+      ['Issue Category', `"${(intel.issueCategory || 'General').replace(/"/g, '""')}"`],
+      ['Priority', `"${(analyzedTicket?.priority || 'Medium').replace(/"/g, '""')}"`],
+      ['Sentiment', `"${(analyzedTicket?.sentiment || 'Neutral').replace(/"/g, '""')}"`],
+      ['Customer Call Summary', `"${(intel.summary || '').replace(/"/g, '""')}"`],
+      ['Full Call Transcript', `"${transcriptText.replace(/"/g, '""')}"`]
+    ];
+
+    const csvString = '\uFEFF' + csvRows.map(row => row.join(',')).join('\n');
+    const blob = new Blob([csvString], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const liveIntel = getLiveIntel();
 
   return (
@@ -905,8 +943,30 @@ export default function ActiveCallPage() {
             </h3>
             
             <div className="card" style={{ flex: 1, minHeight: 0, padding: '0.9rem', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '6px' }}>
-                CUSTOMER CALL SUMMARY
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexShrink: 0 }}>
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  CUSTOMER CALL SUMMARY
+                </div>
+                <button 
+                  onClick={handleDownloadExcel}
+                  className="btn btn-outline"
+                  title="Download Customer Issue Excel Report"
+                  style={{ 
+                    padding: '4px 10px', 
+                    fontSize: '0.72rem', 
+                    fontWeight: 600, 
+                    borderRadius: '8px', 
+                    display: 'inline-flex', 
+                    alignItems: 'center', 
+                    gap: '5px',
+                    color: 'var(--primary)',
+                    borderColor: 'rgba(0, 122, 255, 0.3)',
+                    backgroundColor: 'rgba(0, 122, 255, 0.06)',
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Download size={13} /> Excel Report
+                </button>
               </div>
               <div style={{ 
                 fontSize: '0.84rem', 
