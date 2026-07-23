@@ -195,6 +195,7 @@ export default function ActiveCallPage() {
 
   const messagesRef = useRef<Message[]>([]);
   const autoHangupTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const customerSaidNoRef = useRef<boolean>(false);
 
   // Keep messagesRef in sync with messages state
   useEffect(() => {
@@ -235,6 +236,7 @@ export default function ActiveCallPage() {
         setCallDuration(0);
         setMessages([]); // Real-time transcripts only
         messagesRef.current = [];
+        customerSaidNoRef.current = false;
       });
 
       vapi.on('call-end', () => {
@@ -242,6 +244,7 @@ export default function ActiveCallPage() {
         setIsMuted(false);
         setAiVolume(0);
         setMicVolume(0);
+        customerSaidNoRef.current = false;
         if (autoHangupTimerRef.current) {
           clearTimeout(autoHangupTimerRef.current);
           autoHangupTimerRef.current = null;
@@ -257,6 +260,25 @@ export default function ActiveCallPage() {
       });
 
       vapi.on('message', (message: any) => {
+        // Handle Vapi endCall tool call or call-ending event
+        if (
+          message.type === 'tool-calls' ||
+          message.type === 'function-call' ||
+          message.type === 'call-ending' ||
+          message.type === 'end-of-call-phrase-matched'
+        ) {
+          const toolName = message.functionCall?.name || message.toolCalls?.[0]?.function?.name || message.name;
+          if (toolName === 'endCall' || message.type === 'call-ending' || message.type === 'end-of-call-phrase-matched') {
+            if (!autoHangupTimerRef.current) {
+              autoHangupTimerRef.current = setTimeout(() => {
+                if (vapiRef.current) {
+                  try { vapiRef.current.stop(); } catch (e) {}
+                }
+              }, 2500);
+            }
+          }
+        }
+
         if (message.type === 'transcript') {
           const { role, transcript, transcriptType } = message;
           if (transcriptType === 'final' && transcript.trim()) {
@@ -274,19 +296,35 @@ export default function ActiveCallPage() {
 
             setMessages(prev => [...prev, newMsg]);
 
-            // Auto-disconnect safety trigger: If AI delivers the final farewell phrase after gathering info
+            if (role === 'user') {
+              const userTextLower = lower.trim();
+              const exactNoPhrases = [
+                'no', 'no thanks', "no that's all", 'nothing else',
+                "no that's it", "i'm good", 'nope', 'no thank you',
+                "no that's fine", "no i'm good"
+              ];
+              // Only trigger resolution if user message is an exact brief 'no' closing response
+              if (exactNoPhrases.includes(userTextLower)) {
+                customerSaidNoRef.current = true;
+              }
+            }
+
+            // Auto-disconnect safety trigger: If AI delivers the final closing statement after gathering issue
             if (role === 'assistant') {
-              if (
-                lower.includes('thank you for contacting voxcommerce') ||
-                (lower.includes('have a great day') && lower.includes('voxcommerce')) ||
-                lower.includes('resolve your concern as quickly as possible')
-              ) {
+              const isClosingStatement = [
+                'thank you for calling voxcommerce',
+                'thank you for contacting voxcommerce',
+                'work to resolve your concern as quickly as possible',
+                'have a great day'
+              ].some(phrase => lower.includes(phrase));
+
+              if (isClosingStatement || (customerSaidNoRef.current && (lower.includes('thank') || lower.includes('day') || lower.includes('bye')))) {
                 if (!autoHangupTimerRef.current) {
                   autoHangupTimerRef.current = setTimeout(() => {
                     if (vapiRef.current) {
                       try { vapiRef.current.stop(); } catch (e) {}
                     }
-                  }, 4000); // 4 seconds allows AI to finish speaking voice audio naturally
+                  }, 3800); // 3.8s allows complete voice audio playback before disconnect
                 }
               }
             }
@@ -296,15 +334,35 @@ export default function ActiveCallPage() {
 
       vapi.on('error', (err: any) => {
         console.error('Vapi Web SDK Error Notice:', err);
-        const rawMsg = typeof err === 'string'
-          ? err
-          : err?.message || err?.error?.message || err?.error || '';
-        
-        // Suppress benign user hangup or cancellation messages
-        if (rawMsg && !rawMsg.toLowerCase().includes('canceled') && !rawMsg.toLowerCase().includes('user ended')) {
-          setErrorMessage(`Vapi Voice Engine Notice: ${rawMsg}`);
-        } else if (!rawMsg) {
-          console.warn("Vapi SDK emitted empty error notice.");
+
+        let errMsg = '';
+        if (typeof err === 'string') {
+          errMsg = err;
+        } else if (typeof err?.message === 'string') {
+          errMsg = err.message;
+        } else if (typeof err?.error?.message === 'string') {
+          errMsg = err.error.message;
+        } else if (typeof err?.error === 'string') {
+          errMsg = err.error;
+        } else if (err) {
+          try {
+            errMsg = JSON.stringify(err);
+          } catch (e) {
+            errMsg = String(err);
+          }
+        }
+
+        const lowerMsg = errMsg.toLowerCase();
+
+        // Suppress benign user hangups, meeting ended, or cancellation notices
+        if (
+          errMsg &&
+          !lowerMsg.includes('canceled') &&
+          !lowerMsg.includes('user ended') &&
+          !lowerMsg.includes('meeting-ended') &&
+          !lowerMsg.includes('e2e')
+        ) {
+          setErrorMessage(`Vapi Voice Engine Notice: ${errMsg}`);
         }
         setCallStatus('idle');
       });
@@ -373,6 +431,7 @@ export default function ActiveCallPage() {
     setErrorMessage(null);
     setMessages([]);
     messagesRef.current = [];
+    customerSaidNoRef.current = false;
 
     // Request mic access
     try {
@@ -390,23 +449,37 @@ export default function ActiveCallPage() {
       firstMessage: "Hello! Thank you for calling VoxCommerce. My name is Vox. I'm here to help you today.",
       endCallFunctionEnabled: true,
       endCallPhrases: [
-        "Thank you for contacting VoxCommerce. We appreciate your patience, and we'll work to resolve your concern as quickly as possible. Have a great day!",
+        "Thank you for calling VoxCommerce. Have a great day!",
+        "We'll work to resolve your concern as quickly as possible.",
+        "Thank you for contacting VoxCommerce.",
         "Have a great day!",
-        "Thank you for contacting VoxCommerce."
+        "Goodbye!"
       ],
       model: {
         provider: "openai",
         model: "gpt-4o-mini",
-        systemPrompt: ECOMMERCE_SYSTEM_PROMPT
+        messages: [
+          {
+            role: "system",
+            content: ECOMMERCE_SYSTEM_PROMPT
+          }
+        ]
       }
     };
 
     try {
+      // Start call with ECOMMERCE_SYSTEM_PROMPT overrides
       await vapiRef.current.start(assistantId.trim(), assistantOverrides as any);
     } catch (err: any) {
-      console.error("Failed to start Vapi call:", err);
-      setCallStatus('idle');
-      setErrorMessage("Could not start Vapi call session. Please try again.");
+      console.warn("Retrying direct Vapi start:", err);
+      try {
+        await vapiRef.current.start(assistantId.trim());
+      } catch (fallbackErr: any) {
+        console.error("Failed to start Vapi call session:", fallbackErr);
+        setCallStatus('idle');
+        const reason = fallbackErr?.message || fallbackErr?.error?.message || fallbackErr?.error || err?.message || 'Please verify microphone permissions and network connection.';
+        setErrorMessage(`Could not start Vapi call session: ${reason}`);
+      }
     }
   };
 
