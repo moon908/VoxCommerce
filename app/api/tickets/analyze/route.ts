@@ -22,60 +22,102 @@ Do not include any markdown wrappers (like \`\`\`json), comments, or preambles. 
 
 // Regex/rule-based fallback analysis if Groq is not configured
 function analyzeTranscriptMock(messages: any[]): any {
-  const text = messages.map(m => `${m.role}: ${m.content}`).join('\n');
-  const userMessages = messages.filter(m => m.role === 'user').map(m => m.content).join(' ');
-  const userMessagesLower = userMessages.toLowerCase();
+  const userMessages = messages.filter(m => m.role === 'user').map(m => m.content);
+  const userText = userMessages.join(' ');
+  const userTextLower = userText.toLowerCase();
 
   // Extract Email
   const emailRegex = /[\w.-]+@[\w.-]+\.\w+/;
-  const emailMatch = userMessages.match(emailRegex);
+  const emailMatch = userText.match(emailRegex);
   const customer_email = emailMatch ? emailMatch[0] : '';
 
   // Extract Order ID
-  const orderRegex = /ord-\d+/i;
-  const orderMatch = userMessages.match(orderRegex);
-  const order_id = orderMatch ? orderMatch[0].toUpperCase() : '';
+  let order_id = '';
+  const orderRegexes = [
+    /ord[er]*[-\s]*#?(\d+|\w+)/i,
+    /cust[omer]*[-\s]*id\s*#?(\d+|\w+)/i,
+    /#(\d{4,8})/i,
+    /\b(\d{5,8})\b/i
+  ];
+  for (const regex of orderRegexes) {
+    const match = userText.match(regex);
+    if (match) {
+      const raw = match[0].toUpperCase().replace(/\s+/g, '-');
+      order_id = raw.startsWith('#') || raw.startsWith('ORD') || raw.startsWith('CUST') ? raw : `#${raw}`;
+      break;
+    }
+  }
 
-  // Extract Customer Name (rough extraction)
+  // Extract Customer Name
   let customer_name = 'Anonymous';
   const nameRegexes = [
     /my name is\s+([A-Za-z\s]+)/i,
     /i am\s+([A-Za-z\s]+)/i,
     /this is\s+([A-Za-z\s]+)/i,
-    /name:\s*([A-Za-z\s]+)/i
+    /it's\s+([A-Za-z\s]+)/i,
+    /name is\s+([A-Za-z\s]+)/i,
+    /call me\s+([A-Za-z\s]+)/i
   ];
   for (const regex of nameRegexes) {
-    const match = userMessages.match(regex);
+    const match = userText.match(regex);
     if (match && match[1]) {
-      const name = match[1].trim().split(/\s+/, 2).join(' ');
-      if (name && name.length > 2 && !name.toLowerCase().includes('order') && !name.toLowerCase().includes('refund')) {
-        customer_name = name;
+      const candidate = match[1].trim().split(/\s+/).slice(0, 2).join(' ').replace(/[.,!?]/g, '');
+      const candidateLower = candidate.toLowerCase();
+      if (
+        candidate.length > 1 &&
+        !['order', 'refund', 'calling', 'help', 'having', 'issue', 'shipping', 'delayed'].some(w => candidateLower.includes(w))
+      ) {
+        customer_name = candidate;
         break;
+      }
+    }
+  }
+
+  // Turn-based fallback for customer name
+  if (customer_name === 'Anonymous') {
+    for (let i = 0; i < messages.length - 1; i++) {
+      if (messages[i].role === 'assistant') {
+        const aiText = messages[i].content.toLowerCase();
+        if (aiText.includes('full name') || aiText.includes('your name') || aiText.includes('speaking')) {
+          const userReply = messages[i + 1]?.content?.trim();
+          if (userReply && messages[i + 1].role === 'user') {
+            const cleanReply = userReply.replace(/^(hi|hello|hey|my name is|i am|it's|this is)\s+/i, '').replace(/[.,!?]/g, '');
+            const candidate = cleanReply.split(/\s+/).slice(0, 2).join(' ');
+            const candidateLower = candidate.toLowerCase();
+            if (
+              candidate.length > 1 &&
+              !['don\'t', 'no', 'yes', 'not', 'order', 'refund', 'help'].some(w => candidateLower.includes(w))
+            ) {
+              customer_name = candidate;
+              break;
+            }
+          }
+        }
       }
     }
   }
 
   // Determine Category
   let category = 'Other';
-  if (userMessagesLower.includes('refund') || userMessagesLower.includes('money back') || userMessagesLower.includes('return item')) {
-    category = 'Refund';
-  } else if (userMessagesLower.includes('charge') || userMessagesLower.includes('billing') || userMessagesLower.includes('invoice') || userMessagesLower.includes('double charge')) {
-    category = 'Billing';
-  } else if (userMessagesLower.includes('ship') || userMessagesLower.includes('delivery') || userMessagesLower.includes('track') || userMessagesLower.includes('arrive') || userMessagesLower.includes('package')) {
+  if (userTextLower.includes('ship') || userTextLower.includes('delivery') || userTextLower.includes('delayed') || userTextLower.includes('track') || userTextLower.includes('courier') || userTextLower.includes('package') || userTextLower.includes('arrive')) {
     category = 'Shipping';
-  } else if (userMessagesLower.includes('broken') || userMessagesLower.includes('faulty') || userMessagesLower.includes('login') || userMessagesLower.includes('password') || userMessagesLower.includes('bug')) {
+  } else if (userTextLower.includes('refund') || userTextLower.includes('money back') || userTextLower.includes('return') || userTextLower.includes('cancel')) {
+    category = 'Refund';
+  } else if (userTextLower.includes('charge') || userTextLower.includes('billing') || userTextLower.includes('invoice') || userTextLower.includes('payment') || userTextLower.includes('double')) {
+    category = 'Billing';
+  } else if (userTextLower.includes('broken') || userTextLower.includes('faulty') || userTextLower.includes('defect') || userTextLower.includes('login') || userTextLower.includes('app') || userTextLower.includes('bug')) {
     category = 'Technical';
-  } else if (userMessagesLower.includes('product') || userMessagesLower.includes('size') || userMessagesLower.includes('color') || userMessagesLower.includes('spec') || userMessagesLower.includes('question')) {
+  } else if (userTextLower.includes('product') || userTextLower.includes('size') || userTextLower.includes('color') || userTextLower.includes('spec') || userTextLower.includes('question')) {
     category = 'Product Query';
   }
 
   // Determine Priority
   let priority = 'Low';
-  if (userMessagesLower.includes('urgent') || userMessagesLower.includes('asap') || userMessagesLower.includes('immediately') || userMessagesLower.includes('lawyer') || userMessagesLower.includes('police')) {
+  if (userTextLower.includes('urgent') || userTextLower.includes('asap') || userTextLower.includes('immediately') || userTextLower.includes('lawyer')) {
     priority = 'Urgent';
-  } else if (userMessagesLower.includes('angry') || userMessagesLower.includes('broken') || userMessagesLower.includes('disappointed') || userMessagesLower.includes('damaged') || userMessagesLower.includes('worst')) {
+  } else if (userTextLower.includes('angry') || userTextLower.includes('broken') || userTextLower.includes('disappointed') || userTextLower.includes('damaged')) {
     priority = 'High';
-  } else if (userMessagesLower.includes('refund') || userMessagesLower.includes('double charge') || userMessagesLower.includes('wrong size')) {
+  } else if (userTextLower.includes('refund') || userTextLower.includes('double charge') || userTextLower.includes('wrong size')) {
     priority = 'Medium';
   }
 
@@ -86,12 +128,8 @@ function analyzeTranscriptMock(messages: any[]): any {
   
   let negCount = 0;
   let posCount = 0;
-  negativeWords.forEach(w => {
-    if (userMessagesLower.includes(w)) negCount++;
-  });
-  positiveWords.forEach(w => {
-    if (userMessagesLower.includes(w)) posCount++;
-  });
+  negativeWords.forEach(w => { if (userTextLower.includes(w)) negCount++; });
+  positiveWords.forEach(w => { if (userTextLower.includes(w)) posCount++; });
 
   if (negCount > posCount) {
     sentiment = 'Negative';
@@ -101,16 +139,19 @@ function analyzeTranscriptMock(messages: any[]): any {
 
   // Generate Summary
   let summary = 'Customer reached out for support regarding an issue.';
-  if (category === 'Refund') {
-    summary = `Customer is requesting a return/refund${order_id ? ' for order ' + order_id : ''}.`;
+  if (category === 'Shipping') {
+    summary = `Customer is inquiring about order shipment, delivery delay, or tracking information${order_id ? ' for ' + order_id : ''}.`;
+  } else if (category === 'Refund') {
+    summary = `Customer is requesting a product return or refund${order_id ? ' for order ' + order_id : ''}.`;
   } else if (category === 'Billing') {
-    summary = 'Customer is reporting a billing/invoice discrepancy.';
-  } else if (category === 'Shipping') {
-    summary = 'Customer is inquiring about order shipment, delivery delay, or tracking information.';
+    summary = 'Customer reported a billing, invoice, or payment discrepancy.';
   } else if (category === 'Technical') {
-    summary = 'Customer is reporting a technical issue or product defect.';
+    summary = 'Customer reported a technical issue, login error, or product defect.';
   } else if (category === 'Product Query') {
-    summary = 'Customer is asking a question about product details or specifications.';
+    summary = 'Customer asked a question about product specifications, sizing, or details.';
+  } else if (userMessages.length > 0) {
+    const last = userMessages[userMessages.length - 1];
+    summary = `Customer reported: "${last.length > 100 ? last.substring(0, 100) + '...' : last}"`;
   }
 
   // Structured Data
@@ -118,7 +159,7 @@ function analyzeTranscriptMock(messages: any[]): any {
   if (order_id) structured_data.extracted_order_id = order_id;
   if (customer_email) structured_data.extracted_email = customer_email;
   
-  const sizeMatch = userMessagesLower.match(/(size\s+xs|size\s+s|size\s+m|size\s+l|size\s+xl)/i);
+  const sizeMatch = userTextLower.match(/(size\s+xs|size\s+s|size\s+m|size\s+l|size\s+xl)/i);
   if (sizeMatch) structured_data.product_size = sizeMatch[0].toUpperCase();
 
   return {

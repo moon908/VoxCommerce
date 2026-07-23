@@ -467,76 +467,125 @@ export default function ActiveCallPage() {
   };
 
   const getLiveIntel = () => {
-    if (analyzedTicket) {
-      return {
-        customerName: analyzedTicket.customer_name || 'Anonymous',
-        memberStatus: '★ Premium Gold',
-        orderNumber: analyzedTicket.order_id ? (analyzedTicket.order_id.startsWith('#') ? analyzedTicket.order_id : `#${analyzedTicket.order_id}`) : 'Identifying...',
-        issueCategory: analyzedTicket.category || 'Identifying...',
-        summary: analyzedTicket.summary || 'Customer call completed successfully.'
-      };
-    }
-
-    if (!messages || messages.length === 0) {
-      return {
-        customerName: 'Identifying...',
-        memberStatus: '★ Premium Gold',
-        orderNumber: 'Identifying...',
-        issueCategory: 'Identifying...',
-        summary: 'No active call summary available yet. Start a call to generate real-time customer insights.'
-      };
-    }
-
-    const userMessages = messages.filter(m => m.role === 'user').map(m => m.content);
+    const userMessages = (messages || []).filter(m => m.role === 'user').map(m => m.content);
     const fullText = userMessages.join(' ');
     const fullTextLower = fullText.toLowerCase();
 
-    // Extract Name
+    // 1. Extract Customer Name
     let customerName = 'Identifying...';
-    const nameRegexes = [
-      /my name is\s+([A-Za-z\s]+)/i,
-      /i am\s+([A-Za-z\s]+)/i,
-      /this is\s+([A-Za-z\s]+)/i,
-      /name is\s+([A-Za-z\s]+)/i
-    ];
-    for (const regex of nameRegexes) {
-      const match = fullText.match(regex);
-      if (match && match[1]) {
-        const nameCandidate = match[1].trim().split(/\s+/).slice(0, 2).join(' ').replace(/[.,!?]/g, '');
-        if (nameCandidate.length > 2 && !['order', 'refund', 'calling', 'help', 'having', 'issue'].some(w => nameCandidate.toLowerCase().includes(w))) {
-          customerName = nameCandidate;
+    
+    if (analyzedTicket && analyzedTicket.customer_name && analyzedTicket.customer_name !== 'Anonymous') {
+      customerName = analyzedTicket.customer_name;
+    } else {
+      const nameRegexes = [
+        /my name is\s+([A-Za-z\s]+)/i,
+        /i am\s+([A-Za-z\s]+)/i,
+        /this is\s+([A-Za-z\s]+)/i,
+        /it's\s+([A-Za-z\s]+)/i,
+        /name is\s+([A-Za-z\s]+)/i,
+        /call me\s+([A-Za-z\s]+)/i
+      ];
+      for (const regex of nameRegexes) {
+        const match = fullText.match(regex);
+        if (match && match[1]) {
+          const candidate = match[1].trim().split(/\s+/).slice(0, 2).join(' ').replace(/[.,!?]/g, '');
+          const candidateLower = candidate.toLowerCase();
+          if (
+            candidate.length > 1 &&
+            !['order', 'refund', 'calling', 'help', 'having', 'issue', 'shipping', 'delayed', 'customer'].some(w => candidateLower.includes(w))
+          ) {
+            customerName = candidate;
+            break;
+          }
+        }
+      }
+
+      // Turn-based fallback: look at user reply directly following AI name prompt
+      if (customerName === 'Identifying...' && messages && messages.length > 0) {
+        for (let i = 0; i < messages.length - 1; i++) {
+          if (messages[i].role === 'assistant') {
+            const aiText = messages[i].content.toLowerCase();
+            if (aiText.includes('full name') || aiText.includes('your name') || aiText.includes('speaking')) {
+              const userReply = messages[i + 1]?.content?.trim();
+              if (userReply && messages[i + 1].role === 'user') {
+                const cleanReply = userReply.replace(/^(hi|hello|hey|my name is|i am|it's|this is)\s+/i, '').replace(/[.,!?]/g, '');
+                const candidate = cleanReply.split(/\s+/).slice(0, 2).join(' ');
+                const candidateLower = candidate.toLowerCase();
+                if (
+                  candidate.length > 1 &&
+                  !['don\'t', 'no', 'yes', 'not', 'order', 'refund', 'help'].some(w => candidateLower.includes(w))
+                ) {
+                  customerName = candidate;
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (customerName === 'Identifying...' && analyzedTicket?.customer_name) {
+        customerName = analyzedTicket.customer_name;
+      }
+    }
+
+    // 2. Extract Order Number
+    let orderNumber = 'Identifying...';
+    if (analyzedTicket && analyzedTicket.order_id && analyzedTicket.order_id.trim()) {
+      const raw = analyzedTicket.order_id.toUpperCase();
+      orderNumber = raw.startsWith('#') || raw.startsWith('ORD') || raw.startsWith('CUST') ? raw : `#${raw}`;
+    } else {
+      const orderRegexes = [
+        /ord[er]*[-\s]*#?(\d+|\w+)/i,
+        /cust[omer]*[-\s]*id\s*#?(\d+|\w+)/i,
+        /#(\d{4,8})/i,
+        /\b(\d{5,8})\b/i
+      ];
+      for (const regex of orderRegexes) {
+        const match = fullText.match(regex);
+        if (match) {
+          const raw = match[0].toUpperCase().replace(/\s+/g, '-');
+          orderNumber = raw.startsWith('#') || raw.startsWith('ORD') || raw.startsWith('CUST') ? raw : `#${raw}`;
           break;
         }
       }
     }
 
-    // Extract Order Number
-    let orderNumber = 'Identifying...';
-    const orderMatch = fullText.match(/(ord-\d+|\b\d{5,8}\b)/i);
-    if (orderMatch && orderMatch[0]) {
-      const rawOrder = orderMatch[0].toUpperCase();
-      orderNumber = rawOrder.startsWith('#') ? rawOrder : `#${rawOrder}`;
-    }
-
-    // Extract Issue Category
+    // 3. Extract Issue Category
     let issueCategory = 'Identifying...';
-    if (fullTextLower.includes('refund') || fullTextLower.includes('money back') || fullTextLower.includes('return')) {
-      issueCategory = 'Refund';
-    } else if (fullTextLower.includes('charge') || fullTextLower.includes('billing') || fullTextLower.includes('invoice') || fullTextLower.includes('double')) {
-      issueCategory = 'Billing';
-    } else if (fullTextLower.includes('ship') || fullTextLower.includes('delivery') || fullTextLower.includes('delay') || fullTextLower.includes('track') || fullTextLower.includes('package')) {
+    if (analyzedTicket && analyzedTicket.category && analyzedTicket.category !== 'Other') {
+      issueCategory = analyzedTicket.category;
+    } else if (fullTextLower.includes('ship') || fullTextLower.includes('delivery') || fullTextLower.includes('delayed') || fullTextLower.includes('track') || fullTextLower.includes('package') || fullTextLower.includes('courier')) {
       issueCategory = 'Shipping';
-    } else if (fullTextLower.includes('broken') || fullTextLower.includes('faulty') || fullTextLower.includes('defect') || fullTextLower.includes('login')) {
+    } else if (fullTextLower.includes('refund') || fullTextLower.includes('money back') || fullTextLower.includes('return') || fullTextLower.includes('cancel')) {
+      issueCategory = 'Refund';
+    } else if (fullTextLower.includes('charge') || fullTextLower.includes('billing') || fullTextLower.includes('invoice') || fullTextLower.includes('payment') || fullTextLower.includes('double')) {
+      issueCategory = 'Billing';
+    } else if (fullTextLower.includes('broken') || fullTextLower.includes('faulty') || fullTextLower.includes('defect') || fullTextLower.includes('login') || fullTextLower.includes('bug')) {
       issueCategory = 'Technical';
-    } else if (fullTextLower.includes('product') || fullTextLower.includes('size') || fullTextLower.includes('question') || fullTextLower.includes('spec')) {
+    } else if (fullTextLower.includes('product') || fullTextLower.includes('size') || fullTextLower.includes('color') || fullTextLower.includes('spec') || fullTextLower.includes('question')) {
       issueCategory = 'Product Query';
     }
 
-    // Live Summary
-    let summary = 'Call in progress... Collecting customer details and issue description.';
-    if (userMessages.length > 0) {
-      const lastMsg = userMessages[userMessages.length - 1];
-      summary = `Customer reported: "${lastMsg.length > 110 ? lastMsg.substring(0, 110) + '...' : lastMsg}"`;
+    // 4. Live Call Summary
+    let summary = 'No active call summary available yet. Start a call to generate real-time customer insights.';
+    if (analyzedTicket && analyzedTicket.summary) {
+      summary = analyzedTicket.summary;
+    } else if (userMessages.length > 0) {
+      if (issueCategory === 'Shipping') {
+        summary = `Customer is inquiring about order shipment, delivery delay, or tracking information${orderNumber !== 'Identifying...' ? ' for ' + orderNumber : ''}.`;
+      } else if (issueCategory === 'Refund') {
+        summary = `Customer is requesting a product return or refund${orderNumber !== 'Identifying...' ? ' for order ' + orderNumber : ''}.`;
+      } else if (issueCategory === 'Billing') {
+        summary = 'Customer reported a billing, invoice, or payment discrepancy.';
+      } else if (issueCategory === 'Technical') {
+        summary = 'Customer reported a technical issue, login error, or product defect.';
+      } else if (issueCategory === 'Product Query') {
+        summary = 'Customer asked a question about product specifications, sizing, or details.';
+      } else {
+        const lastMsg = userMessages[userMessages.length - 1];
+        summary = `Customer reported: "${lastMsg.length > 110 ? lastMsg.substring(0, 110) + '...' : lastMsg}"`;
+      }
     }
 
     return {
